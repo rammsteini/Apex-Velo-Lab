@@ -471,8 +471,10 @@ class VeloStravaSync {
    *   range      - from rangeFor()
    *   state      - { merged: {loserId: keptId}, decisions: {id: {verdict:'import'|'same', target}} }
    *   opts       - { ftp, maxHr, lthr, profileName }
+   *   keepMissing - true for an archive import: records missing from `activities` are never removed
+   *                 and no stale links are reported (the archive is a snapshot, not the live account)
    */
-  static plan({ activities, history, range, state = {}, opts = {} }) {
+  static plan({ activities, history, range, state = {}, opts = {}, keepMissing = false }) {
     const S = VeloStravaSync;
     const mergedPrev = { ...(state.merged || {}) };
     const decisions = state.decisions || {};
@@ -514,10 +516,27 @@ class VeloStravaSync {
       for (let i = 0; i < px.length; i++) if (px[i] !== py[i]) return py[i] - px[i];
       return x.id < y.id ? -1 : x.id > y.id ? 1 : 0;
     });
+    // Two sessions more than a day apart never match (VeloDedupe allows 20 min plus a timezone offset), so
+    // each activity is compared only with those from its own and the neighbouring days: fast for a whole
+    // Strava archive, with the same result as comparing every pair.
+    const DAY = 86400000;
+    const dayOf = (t) => Number.isFinite(t) ? Math.floor(t / DAY) : NaN;
+    const near = (buckets, t) => {
+      const d = dayOf(t);
+      if (!Number.isFinite(d)) return buckets.get('all') || [];
+      return [].concat(buckets.get(d - 1) || [], buckets.get(d) || [], buckets.get(d + 1) || [], buckets.get('all') || []);
+    };
+    const addTo = (buckets, t, item) => {
+      const d = dayOf(t);
+      const key = Number.isFinite(d) ? d : 'all';
+      if (!buckets.has(key)) buckets.set(key, []);
+      buckets.get(key).push(item);
+    };
     const kept = [];
+    const keptByDay = new Map();
     ordered.forEach(a => {
       const va = S.dedupeView(a, true);
-      const twin = kept.find(k => VeloDedupe.classify(S.score(va, S.dedupeView(k, true)).score) === 'duplicate');
+      const twin = near(keptByDay, Date.parse(a.start_date)).find(k => VeloDedupe.classify(S.score(va, S.dedupeView(k, true)).score) === 'duplicate');
       if (twin && !(appLinks.has(a.id) && appLinks.has(twin.id))) {
         const sc = S.score(va, S.dedupeView(twin, true));
         const rec = stravaRecs.get(a.id);
@@ -526,11 +545,13 @@ class VeloStravaSync {
         return;
       }
       kept.push(a);
+      addTo(keptByDay, Date.parse(a.start_date), a);
     });
 
     // Layers 1 and 2 for every kept activity.
     const claimed = new Set(); // app ride ids linked in this plan
-    const candidates = hist.filter(r => r && r.date);
+    const candidatesByDay = new Map();
+    hist.filter(r => r && r.date).forEach(r => addTo(candidatesByDay, Date.parse(r.date), r));
     const recOpts = opts;
     [...kept].sort((x, y) => Date.parse(x.start_date) - Date.parse(y.start_date) || (x.id < y.id ? -1 : 1)).forEach(a => {
       // Layer 1: exact id
@@ -573,9 +594,9 @@ class VeloStravaSync {
       // Layer 2: fuzzy against everything already in the app
       const va = S.dedupeView(a, true);
       let best = null;
-      candidates.forEach(r => {
+      near(candidatesByDay, Date.parse(a.start_date)).forEach(r => {
         if (S.isStravaRecord(r) && String(r.stravaActivityId) === a.id) return;
-        if (S.isStravaRecord(r) && !fetchedIds.has(String(r.stravaActivityId)) && S.inRange(r.date, range)) return; // being removed
+        if (!keepMissing && S.isStravaRecord(r) && !fetchedIds.has(String(r.stravaActivityId)) && S.inRange(r.date, range)) return; // being removed
         if (claimed.has(r.id)) return;
         const sc = S.score(va, S.dedupeView(r, false));
         if (sc.score > 0 && (!best || sc.score > best.score)) best = { ...sc, ride: r };
@@ -602,12 +623,12 @@ class VeloStravaSync {
 
     // Imported records deleted on Strava (in range only).
     stravaRecs.forEach((rec, sid) => {
-      if (!S.inRange(rec.date, range) || fetchedIds.has(sid)) return;
+      if (keepMissing || !S.inRange(rec.date, range) || fetchedIds.has(sid)) return;
       out.removed.push({ record: rec });
     });
     // App rides whose linked activity no longer exists: reported only, never changed.
     hist.forEach(r => {
-      if (!S.isAppNative(r)) return;
+      if (keepMissing || !S.isAppNative(r)) return;
       const l = S.linkOf(r);
       if (l && S.inRange(r.date, range) && !fetchedIds.has(l)) out.staleLinks.push({ rideId: r.id, rideTitle: r.title, activityId: l });
     });

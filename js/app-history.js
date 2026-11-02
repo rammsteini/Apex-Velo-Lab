@@ -96,6 +96,16 @@
       Array.from(fileList).forEach(file => {
         const name = file.name.toLowerCase();
         const stem = file.name.replace(/\.[^/.]+$/, '');
+        // Strava's "Download your account" archive: every activity, through the Strava sync preview.
+        if (name.endsWith('.zip')) { this.importStravaArchive(file); return; }
+        // A single compressed ride file (.fit.gz / .tcx.gz / .gpx.gz, as in the Strava archive): unzip, then import.
+        if (/\.(fit|tcx|gpx)\.gz$/.test(name)) {
+          if (typeof DecompressionStream === 'undefined') { this.showToast(`This browser cannot open .gz files - unzip ${file.name} first.`, 'error'); return; }
+          new Response(file.stream().pipeThrough(new DecompressionStream('gzip'))).blob()
+            .then(blob => this.handleIncomingFiles([new File([blob], file.name.slice(0, -3))]))
+            .catch(err => this.showToast(`Could not read ${file.name}: ${err.message}`, 'error'));
+          return;
+        }
         // An automatic backup (data\backups\*.json.gz): unzip, then restore like a .json backup.
         if (name.endsWith('.json.gz')) {
           if (typeof DecompressionStream === 'undefined') { this.showToast('This browser cannot open .gz backups - unzip it first.', 'error'); return; }
@@ -127,6 +137,10 @@
             if (name.endsWith('.tcx')) {
               const ride = VeloRideImporter.parseTcx(content, this.activeProfile.ftp, this.activeProfile.name);
               ride.title = stem;
+              this.addImportedRides([ride]);
+            } else if (name.endsWith('.gpx')) {
+              const ride = VeloRideImporter.parseGpx(content, this.activeProfile.ftp, this.activeProfile.name);
+              ride.title = ride.title && !/^Imported Ride/.test(ride.title) ? ride.title : stem;
               this.addImportedRides([ride]);
             } else if (name.endsWith('.csv')) {
               const ride = VeloRideImporter.parseCsv(content, this.activeProfile.name, this.activeProfile.ftp);
