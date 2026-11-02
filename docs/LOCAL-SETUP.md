@@ -23,6 +23,15 @@ Use desktop Chrome or Edge for Web Bluetooth. Browser/platform support varies; t
 
 **AI:** edit your own `.env`, add an Anthropic, OpenAI or Gemini key and restart the server. Keys stay server-side. Without a key, the local workout and plan engines remain available. Leaving weekly hours blank specifically delegates hours to AI and needs a successful AI response; enter hours to generate a local plan. AI requests send the selected training and recovery context to the chosen provider; Ask also sends your question and conversation context. Provider usage may incur charges.
 
+**AI without an API key (Claude Code):** if [Claude Code](https://claude.com/claude-code) is installed on this PC and you have signed in once by running `claude` in a terminal, the server finds it at startup. Choose **Claude Code** in **Settings > AI engine**. Requests then run through `claude -p` on your Claude subscription instead of the API. The server removes `ANTHROPIC_API_KEY` from the CLI's environment so the CLI cannot fall back to API billing, and it turns off tools, MCP servers, skills and settings so Claude only answers and never touches files. Without any API key, Claude Code becomes the default. Optional `.env` settings:
+
+- `APEX_CLAUDE_CODE_PATH`: path to `claude` (or to `cli.js`) if it is not on `PATH`.
+- `APEX_CLAUDE_CODE_MODEL`: `claude-code-opus` (default), `claude-code-sonnet` or `claude-code-haiku`.
+- `APEX_CLAUDE_CODE=off`: turns the provider off.
+- `APEX_CLAUDE_CODE_TIMEOUT_MS`: request timeout, default 300000.
+
+Each request starts a short-lived CLI process, which adds about a second. Thinking summaries are not shown, and your plan's usage limits apply. This setup is meant for your own use on your own PC.
+
 **Strava:** a Strava subscription is required to create your own personal API application under the [current developer requirements](https://developers.strava.com/docs/getting-started/). Set `localhost` as its callback domain. Put your client ID and secret in `.env`, restart, and use **Connect Strava**. Everyone uses their own application and tokens; no maintainer credentials are supplied. Public integrations have different approval requirements; this repo does not operate one.
 
 **Strava without API sync:** free accounts can [request a bulk account export](https://support.strava.com/en-us/articles/15401919-how-do-i-export-my-strava-data). On Strava's website, open **Settings > My Account > Download your account > Get Started > Request download**. Extract the emailed archive, then select multiple `.fit` or `.tcx` files in **History > Import**. Decompress `.fit.gz` files first. The current importer does not accept the whole ZIP, GPX files or Strava's summary `activities.csv`; its CSV importer expects per-sample ride data. This is a manual import, not ongoing sync.

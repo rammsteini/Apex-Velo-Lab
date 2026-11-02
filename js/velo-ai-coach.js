@@ -7,7 +7,7 @@
  * intensity mix, recency of hard and long rides, and the power-duration profile.
  *
  * When the app is served by the local server and it has an API key for the chosen
- * provider (Claude or Gemini), the context is sent through the local /api/coach
+ * provider (Claude, Gemini or ChatGPT) - or a signed-in Claude Code on this PC - the context is sent through the local /api/coach
  * endpoint (keys never reach the browser) and the summarized reasoning is shown.
  * Without the server or a key - or if the call fails - the built-in physiology
  * engine produces an equivalent, fully deterministic plan.
@@ -29,7 +29,8 @@ class VeloAiCoach {
   static PROVIDERS = {
     claude: { label: 'Claude', keyName: 'ANTHROPIC_API_KEY', defaultModel: 'claude-opus-5-5' },
     gemini: { label: 'Gemini', keyName: 'GEMINI_API_KEY', defaultModel: 'gemini-3.8-flash' },
-    openai: { label: 'ChatGPT', keyName: 'OPENAI_API_KEY', defaultModel: 'gpt-6.1-sol' }
+    openai: { label: 'ChatGPT', keyName: 'OPENAI_API_KEY', defaultModel: 'gpt-6.1-sol' },
+    'claude-code': { label: 'Claude Code', keyName: null, defaultModel: 'claude-code-opus', local: true }
   };
   /** Live model list from the local server ({ id: { label, provider, effort } }); fills the pickers once detected. */
   static SERVER_MODELS = {};
@@ -40,7 +41,10 @@ class VeloAiCoach {
     'gemini-3.8-flash': 'Gemini 3.8 Flash',
     'gemini-3.1-pro-preview': 'Gemini 3.1 Pro (preview)',
     'gemini-3.1-flash-lite': 'Gemini 3.1 Flash-Lite',
-    'gpt-6.1-sol': 'GPT-6.1 Sol'
+    'gpt-6.1-sol': 'GPT-6.1 Sol',
+    'claude-code-opus': 'Opus (Claude Code)',
+    'claude-code-sonnet': 'Sonnet (Claude Code)',
+    'claude-code-haiku': 'Haiku (Claude Code)'
   };
   /** Look-back choices (days) for the history sent to the coach, and the cap on individually listed rides. */
   static LOOKBACK_OPTIONS = [7, 14, 28, 42, 90];
@@ -84,6 +88,7 @@ class VeloAiCoach {
   static providerOf(model) {
     const sm = VeloAiCoach.SERVER_MODELS[model];
     if (sm && VeloAiCoach.PROVIDERS[sm.provider]) return sm.provider;
+    if (/^claude-code-/i.test(model || '')) return 'claude-code';
     if (/^gemini/i.test(model || '')) return 'gemini';
     if (/^(gpt|o\d|chatgpt)/i.test(model || '')) return 'openai';
     return 'claude';
@@ -111,6 +116,17 @@ class VeloAiCoach {
   static labelFor(model) {
     const sm = VeloAiCoach.SERVER_MODELS[model];
     return (sm && sm.label) || VeloAiCoach.MODEL_LABELS[model] || model;
+  }
+  /** What is missing for a provider, in a sentence: an API key in .env, or Claude Code on this PC. */
+  static setupHint(provider) {
+    const p = VeloAiCoach.PROVIDERS[provider] || VeloAiCoach.PROVIDERS.claude;
+    return p.local
+      ? 'Install Claude Code, sign in once by running "claude" in a terminal, then restart Launch-Apex-Velo.bat.'
+      : `Add ${p.keyName} to the .env file and restart Launch-Apex-Velo.bat.`;
+  }
+  /** Short state of a provider for status lines ("key found" / "ready"). */
+  static missingLabel(provider) {
+    return VeloAiCoach.PROVIDERS[provider] && VeloAiCoach.PROVIDERS[provider].local ? 'not found' : 'API key missing';
   }
   static supportsEffort(model) {
     const sm = VeloAiCoach.SERVER_MODELS[model];

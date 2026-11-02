@@ -72,7 +72,7 @@
         this.fillCoachModelOptions();
         this.updateCoachEngineStatus();
         const c = this.aiCoach;
-        this.showToast(c.isLive ? `Coach switched to ${VeloAiCoach.labelFor(c.model)}.` : `${c.providerLabel} selected, but the server has no ${VeloAiCoach.PROVIDERS[c.provider].keyName} yet - see the AI engine card.`, c.isLive ? 'success' : 'warning');
+        this.showToast(c.isLive ? `Coach switched to ${VeloAiCoach.labelFor(c.model)}.` : `${c.providerLabel} selected, but it is not ready yet - ${VeloAiCoach.setupHint(c.provider)}`, c.isLive ? 'success' : 'warning');
       });
       try { this.coachGoal = localStorage.getItem('apex_coach_goal') || 'ftp'; } catch (e) { /* ignore */ }
       document.querySelectorAll('#aiCoachGoalPills .goal-pill').forEach(p => {
@@ -210,7 +210,7 @@
       if (!announce) return;
       const c = this.aiCoach;
       if (c.isLive) this.showToast(`${c.providerLabel} ready - ${VeloAiCoach.labelFor(c.model)}.`, 'success');
-      else if (c.engine.reachable) this.showToast(`Server found, but no ${VeloAiCoach.PROVIDERS[c.provider].keyName} yet. Add it to .env and restart Launch-Apex-Velo.bat.`, 'warning');
+      else if (c.engine.reachable) this.showToast(`Server found, but ${c.providerLabel} is not ready yet. ${VeloAiCoach.setupHint(c.provider)}`, 'warning');
       else this.showToast(`Local server not running - open the app with Launch-Apex-Velo.bat to use ${c.providerLabel}.`, 'warning');
     },
 
@@ -309,20 +309,21 @@
       const c = this.aiCoach;
       const m = c.model;
       const pLabel = c.providerLabel;
-      const keyName = VeloAiCoach.PROVIDERS[c.provider].keyName;
       const modelText = `${VeloAiCoach.labelFor(m)}${VeloAiCoach.supportsEffort(m) ? ` - ${c.effort} effort` : ''}`;
       const state = c.isLive ? 'live' : c.engine.reachable ? 'warn' : '';
       if (el) {
         el.className = `engine-pill ${state}`;
-        el.innerHTML = `<span class="status-indicator-dot"></span>${c.isLive ? esc(modelText) : c.engine.reachable ? `${esc(pLabel)}: API key missing` : 'Offline physiology engine'}`;
+        el.innerHTML = `<span class="status-indicator-dot"></span>${c.isLive ? esc(modelText) : c.engine.reachable ? `${esc(pLabel)}: ${VeloAiCoach.missingLabel(c.provider)}` : 'Offline physiology engine'}`;
       }
       if (detail) {
         const keys = Object.entries(c.engine.providers || {})
-          .map(([, p]) => `${esc(p.label)} ${p.configured ? 'key found' : 'no key'}`).join(' &middot; ');
+          .map(([id, p]) => `${esc(p.label)} ${VeloAiCoach.PROVIDERS[id] && VeloAiCoach.PROVIDERS[id].local ? (p.configured ? 'found' : 'not found') : (p.configured ? 'key found' : 'no key')}`).join(' &middot; ');
         detail.innerHTML = c.isLive
           ? `<strong>Connected.</strong> Requests go to ${esc(modelText)} through the local server. <span style="opacity:.7">(${keys})</span>`
           : c.engine.reachable
-            ? `<strong>No ${esc(pLabel)} API key.</strong> Paste your key after <code>${keyName}=</code> in the <code>.env</code> file, then restart <code>Launch-Apex-Velo.bat</code>. <span style="opacity:.7">(${keys})</span>`
+            ? (VeloAiCoach.PROVIDERS[c.provider].local
+              ? `<strong>Claude Code not found.</strong> Install Claude Code, sign in once by running <code>claude</code> in a terminal, then restart <code>Launch-Apex-Velo.bat</code>. It answers with your Claude subscription, no API key needed. <span style="opacity:.7">(${keys})</span>`
+              : `<strong>No ${esc(pLabel)} API key.</strong> Paste your key after <code>${VeloAiCoach.PROVIDERS[c.provider].keyName}=</code> in the <code>.env</code> file, then restart <code>Launch-Apex-Velo.bat</code>. <span style="opacity:.7">(${keys})</span>`)
             : '<strong>Local server not running.</strong> Open the app with <code>Launch-Apex-Velo.bat</code> (it serves the app and holds your keys). Until then the offline engine is used.';
       }
     },

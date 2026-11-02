@@ -34,7 +34,7 @@
       if (!el || !c) return;
       el.textContent = c.isLive
         ? `${VeloAiCoach.labelFor(c.model)} · only your request and FTP are sent, no ride history`
-        : 'Needs an AI API key (Settings > AI engine). Only your request and FTP are sent, no ride history.';
+        : 'Needs an AI API key or Claude Code (Settings > AI engine). Only your request and FTP are sent, no ride history.';
     },
 
     async createDescribedWorkout() {
@@ -48,7 +48,7 @@
       if (!c.isLive) await c.detectEngine();
       this.updateDescribeEngine();
       if (!c.isLive) {
-        out.innerHTML = `<div class="describe-note">Building a workout from a description needs an AI API key. <button type="button" class="link-btn" data-describe="settings">Open Settings &gt; AI engine</button></div>`;
+        out.innerHTML = `<div class="describe-note">Building a workout from a description needs an AI API key or Claude Code. <button type="button" class="link-btn" data-describe="settings">Open Settings &gt; AI engine</button></div>`;
         return;
       }
       this._describeBusy = true;

@@ -302,7 +302,7 @@
         ? `<div class="ai-breakdown md-body">${md(ai.text)}</div><div class="hint">AI coach: ${esc(ai.label || ai.model)}${ai.effort ? `, ${esc(ai.effort)} effort` : ''} &middot; ${esc(new Date(ai.at).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }))} <button type="button" class="link-btn" data-ai-breakdown="${esc(record.id)}">Ask again</button></div>`
         : live
           ? `<button type="button" class="btn btn-sm" data-ai-breakdown="${esc(record.id)}"><svg class="ic"><use href="#i-sparkles"/></svg>Ask the AI coach (${esc(VeloAiCoach.labelFor(coach.model))}, low effort)</button>`
-          : '<span class="hint">Add an Anthropic, Gemini or OpenAI key to .env for an AI coach breakdown - the summary above is computed offline.</span>';
+          : '<span class="hint">Add an Anthropic, Gemini or OpenAI key to .env (or sign in to Claude Code) for an AI coach breakdown - the summary above is computed offline.</span>';
       return `
         <div class="review-block interval-diagnosis" id="intervalDiagnosis">
           <div class="sub-title"><span>Interval diagnosis</span><span class="hint">hard steps (88% FTP+): target, cadence fade, heart-rate drift</span></div>
@@ -318,7 +318,7 @@
       if (!record || this._aiBreakdownBusy) return null;
       const coach = this.aiCoach;
       if (coach && !coach.isLive) await coach.detectEngine();
-      if (!coach || !coach.isLive) { this.showToast('The AI coach is offline - start Launch-Apex-Velo.bat and add an API key.', 'warning'); return null; }
+      if (!coach || !coach.isLive) { this.showToast('The AI coach is offline - start Launch-Apex-Velo.bat and add an API key (or sign in to Claude Code).', 'warning'); return null; }
       const ftp = record.ftpAtRide || this.activeProfile.ftp;
       const rows = VeloInsight.intervalRows(record.samples, ftp);
       const prompt = VeloInsight.breakdownPrompt(rows, { title: record.title, ftp, minutes: Math.round((record.duration || record.samples.length) / 60), avgHr: record.avgHr, maxHr: this.activeProfile.maxHr });

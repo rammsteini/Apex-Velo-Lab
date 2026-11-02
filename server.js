@@ -6,6 +6,8 @@
  * Claude, Gemini or OpenAI (ChatGPT) API. The API keys are read here, on your computer, from the
  * ANTHROPIC_API_KEY / GEMINI_API_KEY / OPENAI_API_KEY environment variables or the .env file next to this
  * script. They are never sent to the browser, and the .env file is never served.
+ * Without a key, a locally installed and signed-in Claude Code (`claude`) can answer instead: it runs in
+ * headless mode on your Claude subscription (provider "claude-code").
  *
  * Usage:  node server.js [--open]      (Node 24 or newer, no npm install needed)
  */
@@ -51,37 +53,52 @@ const MODELS = {
   'gemini-3.8-flash':          { label: 'Gemini 3.8 Flash', provider: 'gemini', adaptive: true },
   'gemini-3.1-pro-preview':    { label: 'Gemini 3.1 Pro (preview)', provider: 'gemini', adaptive: true },
   'gemini-3.1-flash-lite':     { label: 'Gemini 3.1 Flash-Lite', provider: 'gemini', adaptive: true },
-  'gpt-6.1-sol':               { label: 'GPT-6.1 Sol', provider: 'openai', adaptive: true }
+  'gpt-6.1-sol':               { label: 'GPT-6.1 Sol', provider: 'openai', adaptive: true },
+  // Claude Code (local CLI, your Claude subscription): the id after "claude-code-" is the CLI's model alias.
+  'claude-code-opus':          { label: 'Opus (Claude Code)', provider: 'claude-code', adaptive: true },
+  'claude-code-sonnet':        { label: 'Sonnet (Claude Code)', provider: 'claude-code', adaptive: true },
+  'claude-code-haiku':         { label: 'Haiku (Claude Code)', provider: 'claude-code', adaptive: true }
 };
 // The list above is only the starting point: at startup (and on "Re-check server") the server asks each
 // provider whose key is set for its current model list, so new models appear without editing this file.
 const PROVIDERS = {
   claude: { label: 'Claude', keyName: 'ANTHROPIC_API_KEY', fallbackModel: 'claude-opus-5-5' },
   gemini: { label: 'Gemini', keyName: 'GEMINI_API_KEY', fallbackModel: 'gemini-3.8-flash' },
-  openai: { label: 'ChatGPT', keyName: 'OPENAI_API_KEY', fallbackModel: 'gpt-6.1-sol' }
+  openai: { label: 'ChatGPT', keyName: 'OPENAI_API_KEY', fallbackModel: 'gpt-6.1-sol' },
+  'claude-code': { label: 'Claude Code', keyName: null, fallbackModel: 'claude-code-opus', local: true }
 };
+/** The message for a provider the server cannot use yet. */
+const notConfigured = (p) => p.local
+  ? 'Claude Code was not found or is turned off. Install it, sign in once with "claude", then restart the server (or set APEX_CLAUDE_CODE_PATH in .env).'
+  : `No ${p.label} API key. Add ${p.keyName} to the .env file and restart the server.`;
 const EFFORTS = ['low', 'medium', 'high'];
 
 const API_KEY = (process.env.ANTHROPIC_API_KEY || '').trim();
 const GEMINI_API_KEY = (process.env.GEMINI_API_KEY || '').trim();
 const OPENAI_API_KEY = (process.env.OPENAI_API_KEY || '').trim();
-const KEYS = { claude: API_KEY, gemini: GEMINI_API_KEY, openai: OPENAI_API_KEY };
+// For Claude Code the "key" is the detected CLI version (filled in by detectClaudeCode at startup).
+const KEYS = { claude: API_KEY, gemini: GEMINI_API_KEY, openai: OPENAI_API_KEY, 'claude-code': '' };
 const pickModel = (raw, provider) => { const id = raw === 'claude-sonnet-5' ? 'claude-sonnet-5-5' : raw; return (MODELS[id] && MODELS[id].provider === provider ? id : PROVIDERS[provider].fallbackModel); };
 const DEFAULT_MODELS = {
   claude: pickModel(process.env.APEX_COACH_MODEL, 'claude'),
   gemini: pickModel(process.env.APEX_GEMINI_MODEL, 'gemini'),
-  openai: pickModel(process.env.APEX_OPENAI_MODEL, 'openai')
+  openai: pickModel(process.env.APEX_OPENAI_MODEL, 'openai'),
+  'claude-code': pickModel(process.env.APEX_CLAUDE_CODE_MODEL, 'claude-code')
 };
-// Default provider: APEX_COACH_PROVIDER if set, otherwise whichever has a key (Claude first).
-const DEFAULT_PROVIDER = PROVIDERS[process.env.APEX_COACH_PROVIDER] ? process.env.APEX_COACH_PROVIDER
+// Default provider: APEX_COACH_PROVIDER if set, otherwise whichever has a key (Claude first). With no key at all,
+// Claude Code becomes the default once it is detected (see detectClaudeCode).
+const PROVIDER_FROM_SETTINGS = !!PROVIDERS[process.env.APEX_COACH_PROVIDER];
+let DEFAULT_PROVIDER = PROVIDER_FROM_SETTINGS ? process.env.APEX_COACH_PROVIDER
   : (API_KEY ? 'claude' : GEMINI_API_KEY ? 'gemini' : OPENAI_API_KEY ? 'openai' : 'claude');
-const DEFAULT_MODEL = DEFAULT_MODELS[DEFAULT_PROVIDER];
+let DEFAULT_MODEL = DEFAULT_MODELS[DEFAULT_PROVIDER];
 const DEFAULT_EFFORT = EFFORTS.includes(process.env.APEX_COACH_EFFORT) ? process.env.APEX_COACH_EFFORT : 'low';
 const PORT = parseInt(process.env.APEX_PORT || '8080', 10);
 const API_BASE = (process.env.APEX_ANTHROPIC_BASE_URL || 'https://api.anthropic.com').replace(/\/+$/, '');
 const GEMINI_BASE = (process.env.APEX_GEMINI_BASE_URL || 'https://generativelanguage.googleapis.com').replace(/\/+$/, '');
 const OPENAI_BASE = (process.env.APEX_OPENAI_BASE_URL || 'https://api.openai.com').replace(/\/+$/, '');
 const UPSTREAM_TIMEOUT_MS = 180000;
+// Claude Code starts a fresh CLI process per request, so it gets a little longer.
+const CLAUDE_CODE_TIMEOUT_MS = parseInt(process.env.APEX_CLAUDE_CODE_TIMEOUT_MS || '300000', 10) || 300000;
 const MAX_BODY_BYTES = 256 * 1024;
 
 const SYSTEM_PROMPT = 'You are the Apex Velo Lab sport scientist: an elite cycling coach and exercise physiologist with deep knowledge of training methodology and periodisation. ' +
@@ -223,7 +240,7 @@ function readBody(req, limit = MAX_BODY_BYTES) {
 
 // ----------------------------------------------------------- model catalog --
 // Each provider's /models list, filtered to chat models the coach can use. Rules are kept identical in start_server.ps1.
-const CATALOG = { claude: { source: 'built-in' }, gemini: { source: 'built-in' }, openai: { source: 'built-in' } };
+const CATALOG = { claude: { source: 'built-in' }, gemini: { source: 'built-in' }, openai: { source: 'built-in' }, 'claude-code': { source: 'built-in' } };
 const CATALOG_TTL_MS = 6 * 60 * 60 * 1000;
 let catalogAt = 0;
 let catalogRefresh = null;
@@ -273,7 +290,8 @@ async function listProviderModels(provider) {
 function refreshModelCatalog(force = false) {
   if (!force && Date.now() - catalogAt < CATALOG_TTL_MS) return Promise.resolve();
   if (catalogRefresh) return catalogRefresh;
-  catalogRefresh = Promise.all(Object.keys(PROVIDERS).filter(p => KEYS[p]).map(async (provider) => {
+  // Claude Code has no model list to fetch (its aliases always point at the latest models): re-detect it instead.
+  catalogRefresh = Promise.all([detectClaudeCode()].concat(Object.keys(PROVIDERS).filter(p => KEYS[p] && !PROVIDERS[p].local).map(async (provider) => {
     try {
       const list = await listProviderModels(provider);
       if (!list.length) throw new Error('no chat models returned');
@@ -288,7 +306,7 @@ function refreshModelCatalog(force = false) {
       CATALOG[provider] = { source: 'built-in', error: e.message };
       console.warn(`[models] ${PROVIDERS[provider].label} model list unavailable (${e.message}); using the built-in list.`);
     }
-  })).then(() => { catalogAt = Date.now(); }).finally(() => { catalogRefresh = null; });
+  }))).then(() => { catalogAt = Date.now(); }).finally(() => { catalogRefresh = null; });
   return catalogRefresh;
 }
 
@@ -492,6 +510,152 @@ async function callGemini(reqBody, model, signal) {
   };
 }
 
+// ------------------------------------------------------------- Claude Code --
+// The locally installed Claude Code CLI in headless mode (`claude -p`), signed in with the rider's Claude
+// subscription. No API key is involved: ANTHROPIC_API_KEY is removed from the CLI's environment so it cannot
+// switch to (paid) API billing. Tools, MCP servers, skills, settings and CLAUDE.md files are all turned off,
+// so the CLI only answers - it never reads or changes files - and the extra context stays small.
+const CLAUDE_CODE = { bin: null, viaNode: false, version: '', error: '' };
+let claudeCodeDetect = null;
+
+/** Finds the CLI: APEX_CLAUDE_CODE_PATH, then `claude` on PATH, then the native and npm install locations. */
+function findClaudeCode() {
+  const set = (process.env.APEX_CLAUDE_CODE_PATH || '').trim().replace(/^"(.*)"$/, '$1');
+  if (set) return set;
+  const names = process.platform === 'win32' ? ['claude.exe'] : ['claude'];
+  const home = require('os').homedir();
+  const dirs = (process.env.PATH || '').split(path.delimiter).filter(Boolean).map(d => d.replace(/^"(.*)"$/, '$1'))
+    .concat([path.join(home, '.local', 'bin'), path.join(home, '.claude', 'local')]);
+  for (const d of dirs) for (const n of names) {
+    const f = path.join(d, n);
+    try { if (fs.statSync(f).isFile()) return f; } catch (e) { /* next */ }
+  }
+  // npm install: on Windows `claude` is a .cmd wrapper, which cannot run without a shell - run its cli.js with Node.
+  const npmRoots = [process.env.APPDATA && path.join(process.env.APPDATA, 'npm', 'node_modules'), '/usr/local/lib/node_modules', '/usr/lib/node_modules'].filter(Boolean);
+  for (const r of npmRoots) {
+    const f = path.join(r, '@anthropic-ai', 'claude-code', 'cli.js');
+    try { if (fs.statSync(f).isFile()) return f; } catch (e) { /* next */ }
+  }
+  return null;
+}
+
+/** The environment for the CLI: never an API key (that would bill the API instead of the subscription). */
+function claudeCodeEnv() {
+  const env = { ...process.env };
+  delete env.ANTHROPIC_API_KEY;
+  delete env.CLAUDECODE;  // the server may itself have been started from a Claude Code session
+  delete env.CLAUDE_CODE_ENTRYPOINT;
+  return env;
+}
+
+/** Runs the CLI with arguments and stdin; resolves { code, stdout, stderr }. The process is killed on abort or timeout. */
+function runClaudeCode(args, input, signal, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    const { spawn } = require('child_process');
+    const cmd = CLAUDE_CODE.viaNode ? process.execPath : CLAUDE_CODE.bin;
+    const argv = CLAUDE_CODE.viaNode ? [CLAUDE_CODE.bin, ...args] : args;
+    let child;
+    try {
+      child = spawn(cmd, argv, { cwd: require('os').tmpdir(), env: claudeCodeEnv(), stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+    } catch (e) { return reject(e); }
+    const out = [], err = [];
+    let done = false, timer = null;
+    const finish = (fn) => {
+      if (done) return;
+      done = true;
+      if (timer) clearTimeout(timer);
+      if (signal) signal.removeEventListener('abort', onAbort);
+      fn();
+    };
+    function onAbort() {
+      try { child.kill(); } catch (e) { /* already gone */ }
+      finish(() => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })));
+    }
+    if (timeoutMs) timer = setTimeout(onAbort, timeoutMs);
+    if (signal) { if (signal.aborted) return onAbort(); signal.addEventListener('abort', onAbort); }
+    child.stdout.on('data', d => out.push(d));
+    child.stderr.on('data', d => err.push(d));
+    child.on('error', e => finish(() => reject(e)));
+    child.on('close', code => finish(() => resolve({ code, stdout: Buffer.concat(out).toString('utf8'), stderr: Buffer.concat(err).toString('utf8') })));
+    child.stdin.on('error', () => { /* the CLI exited early; reported through close */ });
+    child.stdin.end(input || '');
+  });
+}
+
+/** Looks for the CLI and reads its version (APEX_CLAUDE_CODE=off turns it off). Never throws. */
+function detectClaudeCode() {
+  if (claudeCodeDetect) return claudeCodeDetect;
+  claudeCodeDetect = (async () => {
+    if (/^(0|off|false|no)$/i.test((process.env.APEX_CLAUDE_CODE || '').trim())) {
+      Object.assign(CLAUDE_CODE, { bin: null, version: '', error: 'turned off (APEX_CLAUDE_CODE=off)' });
+    } else {
+      const bin = findClaudeCode();
+      Object.assign(CLAUDE_CODE, { bin, viaNode: !!bin && /\.(c|m)?js$/i.test(bin), version: '', error: bin ? '' : 'not installed' });
+      if (bin) {
+        try {
+          const r = await runClaudeCode(['--version'], '', null, 20000);
+          const v = (r.stdout.match(/\d+\.\d+\.\d+/) || [])[0];
+          if (r.code === 0 && v) CLAUDE_CODE.version = v;
+          else CLAUDE_CODE.error = (r.stderr || r.stdout || `exit ${r.code}`).trim().slice(0, 200);
+        } catch (e) { CLAUDE_CODE.error = e.message; }
+      }
+    }
+    KEYS['claude-code'] = CLAUDE_CODE.version;
+    // No API key and no provider chosen in .env: Claude Code becomes the default.
+    if (!PROVIDER_FROM_SETTINGS && !API_KEY && !GEMINI_API_KEY && !OPENAI_API_KEY) {
+      DEFAULT_PROVIDER = CLAUDE_CODE.version ? 'claude-code' : 'claude';
+      DEFAULT_MODEL = DEFAULT_MODELS[DEFAULT_PROVIDER];
+    }
+  })().finally(() => { claudeCodeDetect = null; });
+  return claudeCodeDetect;
+}
+
+/** The CLI arguments for one answer: headless, JSON result, the app's system prompt, nothing else loaded. */
+function buildClaudeCodeArgs(system, model, effort) {
+  const alias = String(model).replace(/^claude-code-/, '');
+  const args = ['-p', '--output-format', 'json', '--model', alias, '--system-prompt', system,
+    '--tools', '', '--strict-mcp-config', '--setting-sources', '', '--disable-slash-commands',
+    '--exclude-dynamic-system-prompt-sections', '--no-session-persistence'];
+  if (EFFORTS.includes(effort)) args.push('--effort', effort);
+  return args;
+}
+
+/**
+ * Ask through Claude Code: the CLI takes a single prompt, so the training data and the conversation so far
+ * are written into it, ending with the rider's new question.
+ */
+function buildClaudeCodeAskPrompt(messages, context) {
+  const turns = messages.slice(0, -1).map(m => `${m.role === 'assistant' ? 'ANALYST (you)' : 'RIDER'}:\n${m.content}`);
+  return `TRAINING DATA\n${context || '(no data for this period)'}\n\n` +
+    (turns.length ? `CONVERSATION SO FAR\n${turns.join('\n\n')}\n\n` : '') +
+    `RIDER'S QUESTION (answer this)\n${messages[messages.length - 1].content}`;
+}
+
+/** Calls Claude Code (prompt on stdin, so large prompts never hit the command-line limit); returns the common reply shape. */
+async function callClaudeCode(system, prompt, model, effort, signal) {
+  const r = await runClaudeCode(buildClaudeCodeArgs(system, model, effort), prompt, signal, 0);
+  let data = null;
+  try { data = JSON.parse(r.stdout.trim().split(/\r?\n/).pop()); } catch (e) { /* not JSON */ }
+  if (!data || data.is_error || r.code !== 0) {
+    const msg = String((data && (data.result || data.subtype)) || r.stderr || r.stdout || `exit code ${r.code}`).trim().slice(0, 400);
+    const hint = /log ?in|auth|credential|unauthori[sz]ed/i.test(msg) ? ' Run "claude" once in a terminal and sign in.' : '';
+    return { error: `Claude Code error: ${msg}${hint}`, upstreamStatus: (data && data.api_error_status) || 502, log: msg };
+  }
+  const u = data.usage || {};
+  const used = Object.keys(data.modelUsage || {});
+  return {
+    text: typeof data.result === 'string' ? data.result : '',
+    thinking: '',
+    model: used.length ? used[used.length - 1] : model,
+    stopReason: data.stop_reason || 'end_turn',
+    usage: {
+      input_tokens: (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.cache_read_input_tokens || 0),
+      output_tokens: u.output_tokens || 0,
+      cache_read_input_tokens: u.cache_read_input_tokens || 0
+    }
+  };
+}
+
 /** The model decides the provider; without a (known) model, use the requested or default provider's default model. */
 function resolveEngine(input) {
   const provider = MODELS[input.model] ? MODELS[input.model].provider : (PROVIDERS[input.provider] ? input.provider : DEFAULT_PROVIDER);
@@ -513,15 +677,17 @@ async function handleCoach(req, res) {
   const prompt = typeof input.prompt === 'string' ? input.prompt : '';
   if (!prompt.trim() || prompt.length > 100000) return sendJson(res, 400, { error: 'A prompt of 1-100000 characters is required.' });
   const { provider, model, effort, p } = resolveEngine(input);
-  if (!KEYS[provider]) return sendJson(res, 503, { error: `No ${p.label} API key. Add ${p.keyName} to the .env file and restart the server.` });
+  if (!KEYS[provider]) return sendJson(res, 503, { error: notConfigured(p) });
 
   const ac = new AbortController();
-  const timer = setTimeout(() => ac.abort(), UPSTREAM_TIMEOUT_MS);
+  const timer = setTimeout(() => ac.abort(), p.local ? CLAUDE_CODE_TIMEOUT_MS : UPSTREAM_TIMEOUT_MS);
   // res, not req: the request's 'close' has already fired once its body was read, so it never reports a cancel.
   res.on('close', () => { if (!res.writableEnded) ac.abort(); });
   const t0 = Date.now();
   try {
-    const out = provider === 'gemini'
+    const out = provider === 'claude-code'
+      ? await callClaudeCode(SYSTEM_PROMPT, prompt, model, effort, ac.signal)
+      : provider === 'gemini'
       ? await callGemini(buildGeminiRequest(prompt, model, effort), model, ac.signal)
       : provider === 'openai' ? await callOpenAi(buildOpenAiCoachRequest(prompt, model, effort), ac.signal)
       : await callClaude(buildClaudeRequest(prompt, model, effort), ac.signal);
@@ -572,16 +738,17 @@ async function handleAsk(req, res) {
   const v = validateAsk(input);
   if (v.error) return sendJson(res, 400, { error: v.error });
   const { provider, model, effort, p } = resolveEngine(input);
-  if (!KEYS[provider]) return sendJson(res, 503, { error: `No ${p.label} API key. Add ${p.keyName} to the .env file and restart the server.` });
+  if (!KEYS[provider]) return sendJson(res, 503, { error: notConfigured(p) });
 
   const ac = new AbortController();
-  const timer = setTimeout(() => ac.abort(), UPSTREAM_TIMEOUT_MS);
+  const timer = setTimeout(() => ac.abort(), p.local ? CLAUDE_CODE_TIMEOUT_MS : UPSTREAM_TIMEOUT_MS);
   // res, not req: the request's 'close' has already fired once its body was read, so it never reports a cancel.
   res.on('close', () => { if (!res.writableEnded) ac.abort(); });
   const t0 = Date.now();
   try {
     let out;
-    if (provider === 'gemini') out = await callGemini(buildGeminiAskRequest(v.messages, v.context, effort, model), model, ac.signal);
+    if (provider === 'claude-code') out = await callClaudeCode(ASK_SYSTEM_PROMPT, buildClaudeCodeAskPrompt(v.messages, v.context), model, effort, ac.signal);
+    else if (provider === 'gemini') out = await callGemini(buildGeminiAskRequest(v.messages, v.context, effort, model), model, ac.signal);
     else if (provider === 'openai') out = await callOpenAi(buildOpenAiAskRequest(v.messages, v.context, model, effort), ac.signal);
     else {
       out = await callClaude(buildClaudeAskRequest(v.messages, v.context, model, effort), ac.signal);
@@ -1326,11 +1493,12 @@ if (require.main === module) {
     console.log(GEMINI_API_KEY ? `AI Coach - Gemini: ready, key from ${keySrc(GEMINI_KEY_FROM_ENVIRONMENT, 'GEMINI_API_KEY')}` : 'AI Coach - Gemini: no GEMINI_API_KEY in .env');
     console.log(OPENAI_API_KEY ? `AI Coach - ChatGPT: ready, key from ${keySrc(OPENAI_KEY_FROM_ENVIRONMENT, 'OPENAI_API_KEY')}` : 'AI Coach - ChatGPT: no OPENAI_API_KEY in .env');
     refreshModelCatalog(true).then(() => {
+      console.log(CLAUDE_CODE.version ? `AI Coach - Claude Code: ready (${CLAUDE_CODE.version}, uses your Claude subscription login)` : `AI Coach - Claude Code: ${CLAUDE_CODE.error || 'not found'}`);
       for (const [p, c] of Object.entries(CATALOG)) if (c.source === 'live') console.log(`AI models - ${PROVIDERS[p].label}: ${c.count} models from the API`);
+      console.log(KEYS[DEFAULT_PROVIDER]
+        ? `AI Coach default: ${MODELS[DEFAULT_MODEL].label}, ${DEFAULT_EFFORT} effort (switch provider in the app's AI engine card)`
+        : 'AI Coach: no API key (and no Claude Code) for the default provider - the offline engine is used until you add one.');
     });
-    console.log(KEYS[DEFAULT_PROVIDER]
-      ? `AI Coach default: ${MODELS[DEFAULT_MODEL].label}, ${DEFAULT_EFFORT} effort (switch provider in the app's AI engine card)`
-      : 'AI Coach: no API key for the default provider - the offline engine is used until you add one.');
     console.log('Press Ctrl+C to stop.');
     if (process.argv.includes('--open') && !process.env.APEX_NO_BROWSER) {
       const { spawn } = require('child_process');
@@ -1347,4 +1515,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { createServer, buildClaudeRequest, buildGeminiRequest, buildClaudeAskRequest, buildGeminiAskRequest, buildOpenAiCoachRequest, buildOpenAiAskRequest, prettyOpenAiName, openAiChat, refreshModelCatalog, validateAsk, ASK_SYSTEM_PROMPT, loadDotEnv, slimActivity, MODELS, PROVIDERS };
+module.exports = { createServer, buildClaudeCodeArgs, buildClaudeCodeAskPrompt, callClaudeCode, detectClaudeCode, CLAUDE_CODE, buildClaudeRequest, buildGeminiRequest, buildClaudeAskRequest, buildGeminiAskRequest, buildOpenAiCoachRequest, buildOpenAiAskRequest, prettyOpenAiName, openAiChat, refreshModelCatalog, validateAsk, ASK_SYSTEM_PROMPT, loadDotEnv, slimActivity, MODELS, PROVIDERS };

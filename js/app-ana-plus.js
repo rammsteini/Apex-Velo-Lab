@@ -373,7 +373,7 @@
       const c = this.aiCoach;
       if (!box || !c || this._storyBusy) return;
       if (!c.isLive) await c.detectEngine();
-      if (!c.isLive) { this.showToast('Writing the week with AI needs an API key (Settings > AI engine).', 'warning'); return; }
+      if (!c.isLive) { this.showToast('Writing the week with AI needs an API key or Claude Code (Settings > AI engine).', 'warning'); return; }
       this._storyBusy = true;
       if (btn) { btn.disabled = true; btn.classList.add('is-loading'); }
       box.innerHTML = '<span class="skel skel-line"></span><span class="skel skel-line"></span><span class="skel skel-line short"></span>';
