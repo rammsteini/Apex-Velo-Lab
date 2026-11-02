@@ -1,6 +1,6 @@
 // APEX VELO // LAB service worker - network-first for app files so updates are never
 // masked by a stale cache; the cache is only a fallback when offline.
-const CACHE_NAME = 'apex-velo-cache-v59';
+const CACHE_NAME = 'apex-velo-cache-v61';
 const CORE = [
   './css/ftp-history.css', './js/velo-ftp-history.js', './js/velo-ftp-model.js', './js/app-ftp-history.js',
   './js/phone-zen.js',
@@ -14,8 +14,8 @@ const CORE = [
   './js/velo-demo.js', './js/velo-local-history.js',
   './js/velo-metrics.js', './js/velo-glossary.js', './js/velo-db.js', './js/velo-sound.js', './js/velo-pip.js', './js/velo-folder-sync.js',
   './js/velo-biomech.js', './js/velo-live-graph.js', './js/velo-analytics.js', './js/velo-workouts.js',
-  './js/velo-sport-science.js', './js/velo-ai-coach.js', './js/velo-block-planner.js', './js/velo-sim.js', './js/velo-ble.js', './js/velo-erg.js', './js/velo-insight.js', './js/velo-importer.js', './js/velo-export.js',
-  './js/velo-clock.js', './js/velo-progress.js', './js/velo-dedupe.js', './js/velo-strava-sync.js', './js/velo-health.js', './js/velo-wellness.js', './js/velo-trends.js', './js/velo-power.js', './js/velo-ask.js', './js/velo-describe.js', './js/app.js', './js/app-analytics.js', './js/app-power.js', './js/app-ride-analysis.js', './js/app-ask.js', './js/app-dashboard.js', './js/app-health-ana.js', './js/app-ana-studio.js', './js/app-ana-plus.js', './js/app-history.js', './js/app-coach.js', './js/app-describe.js', './js/app-block.js', './js/app-strava.js', './js/app-strava-sync.js', './js/app-insight.js', './js/app-backup.js', './js/app-remote.js', './js/app-health.js', './js/app-settings.js', './js/app-slipstream.js'
+  './js/velo-sport-science.js', './js/velo-ai-coach.js', './js/velo-block-planner.js', './js/velo-sim.js', './js/velo-ble.js', './js/velo-erg.js', './js/velo-insight.js', './js/velo-importer.js', './js/velo-zip.js', './js/velo-export.js',
+  './js/velo-clock.js', './js/velo-progress.js', './js/velo-dedupe.js', './js/velo-strava-sync.js', './js/velo-strava-archive.js', './js/velo-health.js', './js/velo-wellness.js', './js/velo-trends.js', './js/velo-power.js', './js/velo-ask.js', './js/velo-describe.js', './js/app.js', './js/app-analytics.js', './js/app-power.js', './js/app-ride-analysis.js', './js/app-ask.js', './js/app-dashboard.js', './js/app-health-ana.js', './js/app-ana-studio.js', './js/app-ana-plus.js', './js/app-history.js', './js/app-coach.js', './js/app-describe.js', './js/app-block.js', './js/app-strava.js', './js/app-strava-sync.js', './js/app-strava-archive.js', './js/app-insight.js', './js/app-backup.js', './js/app-remote.js', './js/app-health.js', './js/app-settings.js', './js/app-slipstream.js'
 ];
 
 self.addEventListener('install', (e) => {

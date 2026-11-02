@@ -1186,10 +1186,11 @@
         <div class="import-rows">
           <div class="import-dropzone" id="historyDropzone">
             <svg class="ic ic-lg"><use href="#i-download"/></svg>
-            <h4>Ride files &middot; .fit .tcx .csv .json</h4>
-            <p>Drop files from Garmin, Wahoo, Strava, Apple Watch or HealthFit, or a backup (.json / .json.gz) to restore.</p>
-            <input type="file" id="fileInputTcx" accept=".fit,.tcx,.json,.gz,.csv" multiple hidden>
+            <h4>Ride files &middot; .fit .tcx .gpx .csv .json &middot; Strava archive .zip</h4>
+            <p>Drop files from Garmin, Wahoo, Strava, Apple Watch or HealthFit, a backup (.json / .json.gz) to restore, or your whole Strava history: the ZIP from Strava's "Download your account".</p>
+            <input type="file" id="fileInputTcx" accept=".fit,.tcx,.gpx,.json,.gz,.csv,.zip" multiple hidden>
             <button type="button" class="btn" id="btnChooseImportFiles"><svg class="ic"><use href="#i-download"/></svg>Choose files</button>
+            <div id="historyImportProgress" class="dim" aria-live="polite" hidden></div>
           </div>
           <div class="import-row">
             <div><h4>HealthFit folder</h4><p class="dim">Reads the HealthFit export folder on this PC and adds new rides.</p></div>
@@ -1660,6 +1661,7 @@
         <button type="button" class="close-modal icon-btn" data-sync="cancel" aria-label="Close"><svg class="ic"><use href="#i-x"/></svg></button>
       </div>
       <div id="stravaSyncBody"></div>
+      <div id="stravaSyncBar" class="sync-bar" hidden aria-live="polite"><span class="sync-bar-label"></span><progress max="1"></progress></div>
     </div>
   </div>
 
@@ -1825,11 +1827,13 @@
   <script src="js/velo-erg.js"></script>
   <script src="js/velo-insight.js"></script>
   <script src="js/velo-importer.js"></script>
+  <script src="js/velo-zip.js"></script>
   <script src="js/velo-export.js"></script>
   <script src="js/velo-clock.js"></script>
   <script src="js/velo-progress.js"></script>
   <script src="js/velo-dedupe.js"></script>
   <script src="js/velo-strava-sync.js"></script>
+  <script src="js/velo-strava-archive.js"></script>
   <script src="js/velo-health.js"></script>
   <script src="js/velo-wellness.js"></script>
   <script src="js/velo-trends.js"></script>
@@ -1854,6 +1858,7 @@
   <script src="js/app-block.js"></script>
   <script src="js/app-strava.js"></script>
   <script src="js/app-strava-sync.js"></script>
+  <script src="js/app-strava-archive.js"></script>
   <script src="js/app-insight.js"></script>
   <script src="js/app-backup.js"></script>
   <script src="js/app-devices.js"></script>

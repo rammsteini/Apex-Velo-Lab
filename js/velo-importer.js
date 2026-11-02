@@ -1,5 +1,5 @@
 /**
- * APEX VELO // LAB - Ride file importers (.fit, .tcx, .csv).
+ * APEX VELO // LAB - Ride file importers (.fit, .tcx, .gpx, .csv).
  *
  * Zero-placeholder policy: a channel that is absent from the source file stays
  * null/0 and is rendered as "--" by the UI. No default cadence, heart rate,
@@ -60,7 +60,7 @@ class VeloRideImporter {
 
   // -------------------------------------------------------------------- TCX --
   static parseTcx(tcxXmlString, riderFtp = 185, profileName = 'Imported rider') {
-    const xmlDoc = new DOMParser().parseFromString(tcxXmlString, 'text/xml');
+    const xmlDoc = new DOMParser().parseFromString(String(tcxXmlString).replace(/^[\s\uFEFF]+/, ''), 'text/xml');
     const trackpoints = xmlDoc.getElementsByTagName('Trackpoint');
     if (!trackpoints.length) throw new Error('No trackpoints found in TCX file.');
     const text = (el, tag) => {
@@ -106,6 +106,67 @@ class VeloRideImporter {
       profileName,
       title: 'Imported Ride (' + new Date(startIso).toLocaleDateString() + ')',
       source: 'TCX Import'
+    });
+  }
+
+  // -------------------------------------------------------------------- GPX --
+  /**
+   * GPX track (Strava, Garmin, Komoot ...). Heart rate, cadence and power come from the usual
+   * extensions (Garmin TrackPointExtension hr / cad, <power> or PowerInWatts); distance is
+   * summed from the coordinates.
+   */
+  static parseGpx(gpxString, riderFtp = 185, profileName = 'Imported rider') {
+    const xmlDoc = new DOMParser().parseFromString(String(gpxString).replace(/^[\s\uFEFF]+/, ''), 'text/xml');
+    const pts = xmlDoc.getElementsByTagNameNS('*', 'trkpt');
+    if (!pts.length) throw new Error('No track points found in GPX file.');
+    const first = (el, names) => {
+      for (const n of names) {
+        const node = el.getElementsByTagNameNS('*', n)[0];
+        if (node && node.textContent.trim() !== '') return node.textContent.trim();
+      }
+      return null;
+    };
+    const rad = Math.PI / 180;
+    const haversineM = (a, b) => {
+      const dLat = (b.lat - a.lat) * rad, dLon = (b.lon - a.lon) * rad;
+      const h = Math.sin(dLat / 2) ** 2 + Math.cos(a.lat * rad) * Math.cos(b.lat * rad) * Math.sin(dLon / 2) ** 2;
+      return 2 * 6371008.8 * Math.asin(Math.min(1, Math.sqrt(h)));
+    };
+    const samples = [];
+    let startMs = NaN, prevPos = null, prevSeg = null, distM = 0;
+    for (let i = 0; i < pts.length; i++) {
+      const pt = pts[i];
+      const tStr = first(pt, ['time']);
+      const ms = tStr ? Date.parse(tStr) : NaN;
+      if (!Number.isFinite(startMs) && Number.isFinite(ms)) startMs = ms;
+      const lat = parseFloat(pt.getAttribute('lat')), lon = parseFloat(pt.getAttribute('lon'));
+      const pos = Number.isFinite(lat) && Number.isFinite(lon) ? { lat, lon } : null;
+      const seg = pt.parentNode;
+      if (pos && prevPos && seg === prevSeg) distM += haversineM(prevPos, pos);
+      const hr = parseInt(first(pt, ['hr', 'HeartRateBpm', 'heartrate']), 10);
+      const cad = parseInt(first(pt, ['cad', 'cadence', 'RunCadence']), 10);
+      const pw = parseInt(first(pt, ['power', 'PowerInWatts', 'Watts']), 10);
+      samples.push({
+        time: Number.isFinite(ms) && Number.isFinite(startMs) ? Math.round((ms - startMs) / 1000) : i,
+        segmentStart: i > 0 && seg !== prevSeg,
+        timestamp: Number.isFinite(ms) ? ms : undefined,
+        power: Number.isFinite(pw) && pw > 0 ? pw : 0,
+        cadence: Number.isFinite(cad) && cad > 0 ? cad : 0,
+        hr: Number.isFinite(hr) && hr > 0 ? hr : 0,
+        speed: null,
+        dist: pos ? distM / 1000 : null
+      });
+      if (pos) prevPos = pos;
+      prevSeg = seg;
+    }
+    const startIso = new Date(Number.isFinite(startMs) ? startMs : Date.now()).toISOString();
+    const name = (xmlDoc.getElementsByTagNameNS('*', 'trk')[0] && first(xmlDoc.getElementsByTagNameNS('*', 'trk')[0], ['name'])) || '';
+    return VeloRideImporter.summarize(samples, riderFtp, {
+      id: VeloRideImporter.uid('imported_gpx'),
+      date: startIso,
+      profileName,
+      title: name || 'Imported Ride (' + new Date(startIso).toLocaleDateString() + ')',
+      source: 'GPX Import'
     });
   }
 

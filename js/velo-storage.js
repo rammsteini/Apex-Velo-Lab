@@ -19,9 +19,20 @@
     for (const r of rides) committed.set(String(r.id), signature(r));
     committedOrder = rides.map(r => String(r.id)).join('\n');
   };
+  // The local server accepts at most 200 MB per save. Ride changes are sent in parts of about CHUNK_BYTES;
+  // a single request above MAX_REQUEST_BYTES can never succeed, so it is refused here (like the server's 413)
+  // instead of timing out and being retried from the recovery outbox on every start.
+  V.MAX_REQUEST_BYTES = 150 * 1024 * 1024;
+  V.CHUNK_BYTES = 16 * 1024 * 1024;
   V.request = async function (url, input) {
-    const r = await fetch('api/storage' + url, { cache: 'no-store', signal: AbortSignal.timeout(30000),
-      ...(input === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) }) });
+    const body = input === undefined ? undefined : JSON.stringify(input);
+    if (body !== undefined && body.length > V.MAX_REQUEST_BYTES) {
+      throw Object.assign(new Error(`This save is too large for the local database (${Math.round(body.length / 1048576)} MB in one request) and was discarded.`), { status: 413 });
+    }
+    // Larger parts get more time (a few seconds per 10 MB on a slow disk).
+    const timeout = 30000 + Math.round((body ? body.length : 0) / 1048576) * 1000;
+    const r = await fetch('api/storage' + url, { cache: 'no-store', signal: AbortSignal.timeout(timeout),
+      ...(input === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body }) });
     const j = await r.json().catch(() => ({}));
     if (!r.ok || !j.ok) throw Object.assign(new Error(j.error || `Local storage ${r.status}`), { status: r.status });
     return j;
@@ -227,14 +238,31 @@
         return saved;
       };
       VeloDB.saveRide = ride => VeloDB.saveRidesBatch([ride]);
-      VeloDB.applyRideChanges = async (put = [], del = [], { exact = false } = {}) => {
-        const rideSignatures = put.map(r => [String(r.id), signature(r)]);
-        const change = structuredClone({ put, del, exact });
-        const ok = await write(change, { rideSignatures });
-        if (ok) {
-          await native.applyRideChanges(change.put, change.del, { exact });
+      /**
+       * Saves ride changes in parts of about V.CHUNK_BYTES (deletions go with the first part), so a large
+       * import never exceeds the server's request limit or freezes the page in one huge JSON. onProgress(done,
+       * total) reports the parts. Returns false as soon as a part fails: earlier parts are then already saved,
+       * so a caller that needs all-or-nothing restores its restore point (applyStravaSync does).
+       */
+      VeloDB.applyRideChanges = async (put = [], del = [], { exact = false, onProgress = null } = {}) => {
+        const parts = [];
+        let part = [], size = 0;
+        for (const r of put) {
+          const bytes = JSON.stringify(r).length;
+          if (part.length && size + bytes > V.CHUNK_BYTES) { parts.push(part); part = []; size = 0; }
+          part.push(r); size += bytes;
         }
-        return ok;
+        if (part.length || !parts.length) parts.push(part);
+        for (let i = 0; i < parts.length; i++) {
+          const rideSignatures = parts[i].map(r => [String(r.id), signature(r)]);
+          const change = structuredClone({ put: parts[i], del: i === 0 ? del : [], exact });
+          const ok = await write(change, { rideSignatures });
+          if (!ok) return false;
+          await native.applyRideChanges(change.put, change.del, { exact });
+          if (onProgress) onProgress(i + 1, parts.length);
+          await new Promise(r => setTimeout(r, 0)); // let the page repaint between parts
+        }
+        return true;
       };
       VeloDB.deleteRide = id => VeloDB.applyRideChanges([], [id]);
       VeloDB.clearAllRides = async () => { const ok = await write({ clear: true }); if (ok) await native.clearAllRides(); return ok; };

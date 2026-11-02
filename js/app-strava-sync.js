@@ -255,7 +255,8 @@
       if (!p) return null;
       p.plan = S().plan({
         activities: p.fetched.activities, history: this.completedWorkouts, range: p.range,
-        state: { merged: p.state.merged, decisions: p.decisions }, opts: this.syncOptions()
+        state: { merged: p.state.merged, decisions: p.decisions }, opts: this.syncOptions(),
+        keepMissing: !!p.archive  // an archive import only adds, links and refreshes - it never removes
       });
       p.decisionsChanged = S().stable(p.decisions) !== S().stable(p.state.decisions);
       return p.plan;
@@ -272,6 +273,7 @@
 
     cancelStravaSync() {
       this._stravaSyncPreview = null;
+      this._archiveSetup = null;
       this.closeModal('stravaSyncModal');
     },
 
@@ -289,6 +291,8 @@
       const body = document.getElementById('stravaSyncBody');
       if (!p || !body) return;
       const plan = p.plan;
+      const title = document.getElementById('stravaSyncTitle');
+      if (title) title.textContent = p.archive ? 'Strava archive preview' : 'Strava sync preview';
       const fmtDate = (iso) => { const d = new Date(iso); return isNaN(d) ? '--' : d.toLocaleString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }); };
       const kindChip = (a) => { const k = S().activityKind(a.sport_type || a.type); return k === 'ride' ? '' : `<span class="chip chip-xs act-chip act-${k}">${esc(a.sport_type || k)}</span>`; };
       const mins = (a) => `${Math.round((Number(a.moving_time) || Number(a.elapsed_time) || 0) / 60)} min`;
@@ -326,6 +330,14 @@
       if (plan.staleLinks.length) notes.push(`${plan.staleLinks.length} of your rides link to a Strava activity that no longer exists (your rides are not changed)`);
       if (p.fetched.streamsAdded) notes.push(`${p.fetched.streamsAdded} ride${p.fetched.streamsAdded === 1 ? '' : 's'} get${p.fetched.streamsAdded === 1 ? 's' : ''} second-by-second power data`);
       if (p.fetched.streamsPending) notes.push(`${p.fetched.streamsPending} ride${p.fetched.streamsPending === 1 ? '' : 's'} still without power data (${p.fetched.streamsError ? 'Strava could not be read' : 'Strava rate limit'}) - the next sync adds ${p.fetched.streamsPending === 1 ? 'it' : 'them'}`);
+      if (p.archive) {
+        const a = p.archive;
+        notes.push(`${a.rideFiles} ride file${a.rideFiles === 1 ? '' : 's'} read from ${a.fileName}`);
+        if (a.powerRides) notes.push(`${a.powerRides} with a power meter, ${a.sampleRides} of them with second-by-second data`);
+        if (a.failed.length) notes.push(`${a.failed.length} file${a.failed.length === 1 ? '' : 's'} could not be read (summary from activities.csv used instead)`);
+        if (a.missingFiles) notes.push(`${a.missingFiles} ride file${a.missingFiles === 1 ? '' : 's'} not in the ZIP (summary used)`);
+        notes.push('nothing is removed by an archive import');
+      }
       if (p.fetched.pending) notes.push(`${p.fetched.pending} activit${p.fetched.pending === 1 ? 'y' : 'ies'} without description yet (Strava rate limit) - the next sync adds them`);
       body.innerHTML = `
         <div class="sync-head">
@@ -413,6 +425,11 @@
     /** Mirrors a history list to localStorage like persistHistoryLocal (full, else summaries). */
     writeHistoryLocal(list) {
       if (this._syncFailAt === 'local') return false;
+      // Browser storage holds a few MB: with many recorded samples go straight to the summaries.
+      const samples = list.reduce((n, r) => n + (Array.isArray(r.samples) ? r.samples.length : 0), 0);
+      if (samples > 200000) {
+        try { localStorage.setItem('apex_velo_history', JSON.stringify(list.map(({ samples: s, ...rest }) => rest))); return true; } catch (e2) { return false; }
+      }
       try { localStorage.setItem('apex_velo_history', JSON.stringify(list)); return true; } catch (e) {
         try { localStorage.setItem('apex_velo_history', JSON.stringify(list.map(({ samples, ...rest }) => rest))); return true; } catch (e2) { return false; }
       }
@@ -488,9 +505,11 @@
 
         // 2. One IndexedDB transaction with every put and delete.
         if (this._syncFailAt === 'idb') throw new Error('Simulated failure while writing the ride database.');
-        const dbOk = await VeloDB.applyRideChanges(next.put, next.del);
-        if (!dbOk) throw new Error('Could not write the ride database. Nothing was changed.');
+        // Large changes are saved in parts: once the first part may be written, a failure restores the restore point.
         idbWritten = true;
+        this.setSyncBar('Saving rides...', 0);
+        const dbOk = await VeloDB.applyRideChanges(next.put, next.del, { onProgress: (done, total) => this.setSyncBar(`Saving rides... part ${done} of ${total}`, done / total) });
+        if (!dbOk) throw new Error(window.VeloStorage?.error ? `Could not write the ride database: ${String(VeloStorage.error).replace(/\.$/, '')}.` : 'Could not write the ride database.');
 
         // 3. localStorage mirror + sync state.
         if (!this.writeHistoryLocal(next.history)) throw new Error('Could not write the ride history to browser storage.');
@@ -500,6 +519,7 @@
 
         this.completedWorkouts = next.history;
         this._stravaSyncPreview = null;
+        this.setSyncBar('');
         this.closeModal('stravaSyncModal');
         await this.pruneStravaBackups();
         if (this.reviewTrainingBlock) this.reviewTrainingBlock({ announce: true });
@@ -515,6 +535,7 @@
           // Roll back to the restore point so storage is exactly as before.
           try {
             if (idbWritten) {
+              this.setSyncBar('Putting everything back...', 0);
               const snapRec = await VeloDB.getSetting(backupKey);
               if (!snapRec) throw new Error('restore point not found');
               await this.restoreSnapshot(snapRec);
@@ -535,8 +556,20 @@
         return { ok: false, error: msg };
       } finally {
         this._syncBusy = false;
+        this.setSyncBar('');
         if (btn) btn.classList.remove('is-loading');
       }
+    },
+
+    /** The progress bar of the sync / archive dialog: label and fraction 0-1 (no label hides it, null = busy). */
+    setSyncBar(label, fraction = null) {
+      const wrap = document.getElementById('stravaSyncBar');
+      if (!wrap) return;
+      wrap.hidden = !label;
+      const text = wrap.querySelector('.sync-bar-label');
+      const bar = wrap.querySelector('progress');
+      if (text) text.textContent = label || '';
+      if (bar) { if (fraction === null) bar.removeAttribute('value'); else bar.value = Math.max(0, Math.min(1, fraction)); }
     },
 
     /** Re-renders every view that depends on the ride list (no storage writes). */
